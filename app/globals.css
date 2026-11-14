@@ -295,3 +295,57 @@ body {
 .send:hover {
   color: #ffffff;
 }
+
+/* --- pasek życia pokoju ------------------------------------------------ */
+.ttl {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 1px;
+  width: 100%;
+  background: #1d1d1d;
+  transform-origin: left center;
+  animation-name: drain;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+  pointer-events: none;
+}
+
+@keyframes drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+/* --- utrata fokusu / ukryta karta ------------------------------------- */
+.app.dim .feed,
+.app.dim .foot,
+.app.dim .fp {
+  filter: blur(16px);
+  opacity: 0.06;
+  transition: filter 0.12s ease, opacity 0.12s ease;
+}
+
+.feed,
+.foot,
+.fp {
+  transition: filter 0.12s ease, opacity 0.12s ease;
+}
+
+/* --- wiadomość, której serwer nie potwierdził ------------------------- */
+.b.unsent {
+  opacity: 0.3;
+}
+
+/* --- brak łącza / rozmówca wyszedł ------------------------------------ */
+.app.held .inp,
+.app.held .inp:focus {
+  border-color: #141414;
+}
+
+.app.held .send {
+  color: #2a2a2a;
+}

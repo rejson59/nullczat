@@ -1,31 +1,21 @@
 /** @type {import('next').NextConfig} */
-const csp = [
-  "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data:",
-  "font-src 'self'",
-  "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
-  "frame-ancestors 'self' https://*.e2b.app https://*.arena.ai",
-  "base-uri 'none'",
-  "form-action 'none'",
-  "object-src 'none'",
-].join("; ");
-
 const nextConfig = {
   poweredByHeader: false,
   reactStrictMode: false,
+  // CSP jest ustawiane w middleware.ts (nonce per żądanie).
   async headers() {
     return [
       {
         source: "/:path*",
         headers: [
-          { key: "Content-Security-Policy", value: csp },
           { key: "Referrer-Policy", value: "no-referrer" },
           { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Permitted-Cross-Domain-Policies", value: "none" },
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), interest-cohort=()" },
           { key: "Cache-Control", value: "no-store, max-age=0" },
           { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+          { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
+          { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
         ],
       },
     ];

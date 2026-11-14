@@ -338,3 +338,33 @@ Wybrane: **A+ z linkiem jednorazowym**, zniszczenie dla wszystkich, 1:1, Supabas
 2. DH-ratchet (Double Ratchet) zamiast samego łańcucha symetrycznego.
 3. Hybryda post-quantum (X25519 + ML-KEM-768), gdy WebCrypto to udźwignie.
 4. Własna domena — `nullczat.vercel.app` jest zajęta przez inny projekt Vercel.
+
+---
+
+## 11. Hartowanie (v1.1)
+
+### Zamknięte wycieki
+
+| Wektor | Co zrobione |
+|---|---|
+| Tłumaczenie strony w Chrome wysyłało tekst DOM do Google | `<html translate="no">`, `<body translate="no">`, `<meta name="google" content="notranslate">` |
+| Podgląd przy alt-tabie / udostępnianiu ekranu | cała treść rozmywana (`blur(16px)`, opacity 0.06) przy `blur`, `focus` i `visibilitychange` |
+| Zerwany WebSocket = wiadomości ginęły bez śladu | reconnect z backoffem (0,7 s × 1,6, maks. 10 s), `ack: true` i kolejka niepotwierdzonych ramek wysyłana ponownie po powrocie łącza; niepotwierdzona wiadomość jest przygaszona |
+| Cisza po zniknięciu rozmówcy | presence → 60 s bez drugiej osoby = pokój gaśnie |
+| Tekst w DOM mógł wyciec przez rozszerzenia/przeglądarkę | brak zewnętrznych skryptów, `script-src` z nonce + `strict-dynamic`, zero `unsafe-inline` dla skryptów |
+
+### Znikaniem steruje czas
+
+- **TTL pokoju: 30 min** (serwer), pokazany jako 1 px kreska u góry, która się dopala; po jej zniknięciu klient kasuje wszystko.
+- **Bezczynność 10 min** → natychmiastowe zniszczenie dla obu stron.
+- **Zamknięcie karty** → obecność znika, druga strona ma 60 s, po czym u niej też wszystko gaśnie.
+
+### Skorupa
+
+- CSP z **nonce per żądanie** + `strict-dynamic` (middleware). Sprawdzone: 13/13 tagów `<script>` z nonce, meta `csp-nonce` zgodna z nagłówkiem.
+- `Cross-Origin-Embedder-Policy: require-corp`, `Cross-Origin-Resource-Policy: same-origin`, `COOP: same-origin`, `X-Permitted-Cross-Domain-Policies: none`.
+- Wersje zależności **przypięte na sztywno** (`save-exact`), skrypty `npm run audit` i `npm run check`.
+
+### Świadomie odpuszczone
+
+Blokowanie screenshotów i „wykrywanie nagrywania ekranu" — w przeglądarce to teatr, który daje fałszywe poczucie bezpieczeństwa.

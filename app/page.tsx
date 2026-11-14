@@ -6,7 +6,12 @@ import * as C from "@/lib/crypto";
 import * as L from "@/lib/live";
 
 type Phase = "boot" | "idle" | "wait" | "chat" | "dead";
-type Msg = { id: number; mine: boolean; text: string };
+type Msg = { id: number; mine: boolean; text: string; sent: boolean };
+type Wire = { k?: string; pk?: string } & Partial<C.Frame>;
+
+const IDLE_BURN_MS = 10 * 60 * 1000; // bezczynność
+const PEER_GONE_MS = 60 * 1000; // rozmówca wyszedł
+const FALLBACK_TTL_MS = 30 * 60 * 1000; // gdyby serwer nie zwrócił exp
 
 const I = {
   plus: (
@@ -44,9 +49,13 @@ export default function Page() {
   const [draft, setDraft] = useState("");
   const [copied, setCopied] = useState(false);
   const [peer, setPeer] = useState(false);
+  const [peerGone, setPeerGone] = useState(false);
   const [fp, setFp] = useState<string[]>([]);
   const [linkUrl, setLinkUrl] = useState("");
   const [peek, setPeek] = useState(false);
+  const [dim, setDim] = useState(false);
+  const [uplink, setUplink] = useState(true);
+  const [ttl, setTtl] = useState<{ ms: number; key: number } | null>(null);
 
   const sess = useRef<C.Session | null>(null);
   const chan = useRef<RealtimeChannel | null>(null);
@@ -54,111 +63,156 @@ export default function Page() {
   const eph = useRef<C.Ephemeral | null>(null);
   const hostPk = useRef<string>("");
   const room = useRef<string>("");
+  const seat = useRef<string>("");
   const destroyTicket = useRef<string>("");
   const link = useRef<string>("");
-  const retry = useRef<number | null>(null);
+  const helloT = useRef<number | null>(null);
   const isHost = useRef(false);
   const over = useRef(false);
   const counter = useRef(0);
   const feedEnd = useRef<HTMLDivElement | null>(null);
   const peekT = useRef<number | null>(null);
+  const reconnT = useRef<number | null>(null);
+  const reconnN = useRef(0);
+  const pending = useRef<Map<number, C.Frame>>(new Map());
+  const lastAct = useRef(Date.now());
+  const peerSeen = useRef(false);
+  const goneT = useRef<number | null>(null);
 
-  const resetRef = useRef<() => void>(() => {});
-  const shutdownRef = useRef<(tell: boolean) => void>(() => {});
+  // Wywołania między funkcjami, które nie mogą się odwołać do siebie nawzajem.
+  const api = useRef({
+    connect: () => {},
+    reconnect: () => {},
+    frame: (_: unknown) => {},
+    flush: () => {},
+    shutdown: (_: boolean) => {},
+    hello: () => {},
+  });
 
-  const startPeek = useCallback(() => {
-    if (peekT.current !== null) return;
-    peekT.current = window.setTimeout(() => setPeek(true), 180);
+  const touch = useCallback(() => {
+    lastAct.current = Date.now();
   }, []);
 
-  const endPeek = useCallback(() => {
-    if (peekT.current !== null) {
-      window.clearTimeout(peekT.current);
-      peekT.current = null;
+  const markSent = useCallback((id: number) => {
+    pending.current.delete(id);
+    setMsgs((m) => m.map((x) => (x.id === id ? { ...x, sent: true } : x)));
+  }, []);
+
+  const pushIn = useCallback((text: string) => {
+    setMsgs((m) => [...m, { id: ++counter.current, mine: false, text, sent: true }]);
+  }, []);
+
+  const sendFrame = useCallback((payload: unknown): Promise<boolean> => {
+    const ch = chan.current;
+    if (!ch) return Promise.resolve(false);
+    return ch
+      .send({ type: "broadcast", event: "f", payload })
+      .then((r) => r === "ok")
+      .catch(() => false);
+  }, []);
+
+  const flush = useCallback(() => {
+    const entries = Array.from(pending.current.entries());
+    for (const [id, frame] of entries) {
+      void sendFrame(frame).then((ok) => {
+        if (ok) markSent(id);
+      });
     }
-    setPeek(false);
-  }, []);
+  }, [markSent, sendFrame]);
 
-  const push = useCallback((mine: boolean, text: string) => {
-    setMsgs((m) => [...m, { id: ++counter.current, mine, text }]);
-  }, []);
+  const teardown = useCallback(() => {
+    if (helloT.current !== null) window.clearInterval(helloT.current);
+    if (reconnT.current !== null) window.clearTimeout(reconnT.current);
+    if (goneT.current !== null) window.clearTimeout(goneT.current);
+    helloT.current = null;
+    reconnT.current = null;
+    goneT.current = null;
 
-  const wipe = useCallback(
-    (opts: { tell: boolean }) => {
-      if (over.current) return;
-      over.current = true;
+    sess.current?.destroy();
+    sess.current = null;
 
-      if (opts.tell && sess.current && chan.current) {
-        try {
-          const f = sess.current.encrypt(C.KIND_BURN, "");
-          void chan.current.send({ type: "broadcast", event: "f", payload: f });
-        } catch {
-          /* nic */
-        }
-      }
-
-      if (retry.current !== null) {
-        window.clearInterval(retry.current);
-        retry.current = null;
-      }
-
-      sess.current?.destroy();
-      sess.current = null;
-
-      if (chan.current) {
-        try {
-          void chan.current.unsubscribe();
-        } catch {
-          /* nic */
-        }
-        chan.current = null;
-      }
-
-      secret.current?.fill(0);
-      secret.current = null;
-      eph.current?.sk.fill(0);
-      eph.current = null;
-      hostPk.current = "";
-      room.current = "";
-      link.current = "";
-
-      setMsgs([]);
-      setDraft("");
-      setFp([]);
-      setPeer(false);
-      setLinkUrl("");
-
-
+    if (chan.current) {
       try {
-        window.localStorage.clear();
-        window.sessionStorage.clear();
+        void L.live().removeChannel(chan.current);
       } catch {
         /* nic */
       }
-    },
-    [],
-  );
-
-  const send = useCallback((payload: unknown) => {
-    const ch = chan.current;
-    if (!ch) return;
-    try {
-      void ch.send({ type: "broadcast", event: "f", payload });
-    } catch {
-      /* nic */
+      chan.current = null;
     }
+
+    secret.current?.fill(0);
+    secret.current = null;
+    eph.current?.sk.fill(0);
+    eph.current = null;
+    hostPk.current = "";
+    room.current = "";
+    seat.current = "";
+    link.current = "";
+    pending.current.clear();
+    peerSeen.current = false;
+
+    setMsgs([]);
+    setDraft("");
+    setFp([]);
+    setPeer(false);
+    setPeerGone(false);
+    setLinkUrl("");
+    setTtl(null);
   }, []);
 
+  const hardReset = useCallback(() => {
+    setPhase("idle");
+    window.location.replace("/");
+    window.setTimeout(() => {
+      window.location.reload();
+    }, 320);
+  }, []);
+
+  const shutdown = useCallback(
+    (tell: boolean) => {
+      if (over.current) return;
+      over.current = true;
+      const d = destroyTicket.current;
+
+      const finish = () => {
+        teardown();
+        destroyTicket.current = "";
+        if (!d) {
+          hardReset();
+          return;
+        }
+        const bail = new Promise<void>((r) => window.setTimeout(r, 1200));
+        void Promise.race([L.destroyRoom(d), bail]).then(hardReset, hardReset);
+      };
+
+      if (tell && sess.current) {
+        let frame: C.Frame | null = null;
+        try {
+          frame = sess.current.encrypt(C.KIND_BURN, "");
+        } catch {
+          frame = null;
+        }
+        if (frame) {
+          const wait = new Promise<void>((r) => window.setTimeout(r, 800));
+          void Promise.race([sendFrame(frame), wait]).then(finish, finish);
+          return;
+        }
+      }
+      finish();
+    },
+    [hardReset, sendFrame, teardown],
+  );
+
   const handleFrame = useCallback(
-    (p: unknown) => {
-      if (!p || over.current) return;
-      const f = p as { k?: string; pk?: string } & Partial<C.Frame>;
+    (raw: unknown) => {
+      if (!raw || over.current) return;
+      const f = raw as Wire;
 
       // --- parowanie -------------------------------------------------
       if (f.k === "h") {
         if (!isHost.current || !f.pk) return;
         if (hostPk.current) {
-          send({ k: "h2", pk: hostPk.current });
+          void sendFrame({ k: "h2", pk: hostPk.current });
           return;
         }
         const S = secret.current;
@@ -172,8 +226,8 @@ export default function Page() {
         const s = new C.Session(root, true, room.current);
         sess.current = s;
         setFp(s.fingerprint);
-        send({ k: "h2", pk: hostPk.current });
-        send(s.encrypt(C.KIND_PING, ""));
+        void sendFrame({ k: "h2", pk: hostPk.current });
+        void sendFrame(s.encrypt(C.KIND_PING, ""));
         S.fill(0);
         secret.current = null;
         return;
@@ -190,12 +244,12 @@ export default function Page() {
         const s = new C.Session(root, false, room.current);
         sess.current = s;
         setFp(s.fingerprint);
-        send(s.encrypt(C.KIND_PING, ""));
+        void sendFrame(s.encrypt(C.KIND_PING, ""));
         S.fill(0);
         secret.current = null;
-        if (retry.current !== null) {
-          window.clearInterval(retry.current);
-          retry.current = null;
+        if (helloT.current !== null) {
+          window.clearInterval(helloT.current);
+          helloT.current = null;
         }
         return;
       }
@@ -207,64 +261,141 @@ export default function Page() {
       if (!out) return;
 
       if (out.kind === C.KIND_BURN) {
-        shutdownRef.current(false);
+        api.current.shutdown(false);
         return;
       }
       if (out.kind === C.KIND_MSG) {
-        push(false, out.text);
+        pushIn(out.text);
         setPhase("chat");
         return;
       }
       if (out.kind === C.KIND_PING) setPhase("chat");
     },
-    [push, send, wipe],
+    [pushIn, sendFrame],
   );
 
-  const subscribe = useCallback(
-    (roomId: string, seat: string, ready: () => void) => {
-      const ch = L.openChannel(roomId, seat);
-      ch.on("broadcast", { event: "f" }, (msg: { payload?: unknown }) => handleFrame(msg.payload));
-      ch.on("presence", { event: "sync" }, () => {
+  const reconnect = useCallback(() => {
+    if (over.current || reconnT.current !== null) return;
+    const delay = Math.min(10000, 700 * Math.pow(1.6, reconnN.current));
+    reconnN.current += 1;
+    reconnT.current = window.setTimeout(() => {
+      reconnT.current = null;
+      const old = chan.current;
+      chan.current = null;
+      if (old) {
         try {
-          setPeer(Object.keys(ch.presenceState()).length > 1);
+          void L.live().removeChannel(old);
         } catch {
           /* nic */
         }
-      });
-      ch.subscribe((status: string) => {
-        if (status === "SUBSCRIBED") {
-          void ch.track({ at: Date.now() });
-          ready();
+      }
+      api.current.connect();
+    }, delay);
+  }, []);
+
+  const connect = useCallback(() => {
+    if (over.current || !room.current || !seat.current) return;
+    const ch = L.openChannel(room.current, seat.current);
+
+    ch.on("broadcast", { event: "f" }, (m: { payload?: unknown }) => api.current.frame(m.payload));
+
+    ch.on("presence", { event: "sync" }, () => {
+      if (over.current) return;
+      let n = 0;
+      try {
+        n = Object.keys(ch.presenceState()).length;
+      } catch {
+        n = 0;
+      }
+      const other = n > 1;
+      setPeer(other);
+      if (other) {
+        peerSeen.current = true;
+        setPeerGone(false);
+        if (goneT.current !== null) {
+          window.clearTimeout(goneT.current);
+          goneT.current = null;
         }
-      });
-      chan.current = ch;
-    },
-    [handleFrame],
-  );
+      } else if (peerSeen.current && goneT.current === null) {
+        setPeerGone(true);
+        goneT.current = window.setTimeout(() => {
+          goneT.current = null;
+          api.current.shutdown(false);
+        }, PEER_GONE_MS);
+      }
+    });
+
+    ch.subscribe((status: string) => {
+      if (over.current) return;
+      if (status === "SUBSCRIBED") {
+        reconnN.current = 0;
+        setUplink(true);
+        void ch.track({ at: Date.now() });
+        api.current.flush();
+        if (!isHost.current && !sess.current) api.current.hello();
+      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+        setUplink(false);
+        api.current.reconnect();
+      }
+    });
+
+    chan.current = ch;
+  }, []);
+
+  const startHello = useCallback(() => {
+    if (!eph.current) eph.current = C.newEphemeral();
+    const beat = () => {
+      if (over.current || sess.current || !eph.current) {
+        if (helloT.current !== null) {
+          window.clearInterval(helloT.current);
+          helloT.current = null;
+        }
+        return;
+      }
+      void sendFrame({ k: "h", pk: C.b64u.enc(eph.current.pk) });
+    };
+    if (helloT.current !== null) return;
+    beat();
+    helloT.current = window.setInterval(beat, 1300);
+  }, [sendFrame]);
+
+  useEffect(() => {
+    api.current.connect = connect;
+    api.current.reconnect = reconnect;
+    api.current.frame = handleFrame;
+    api.current.flush = flush;
+    api.current.shutdown = shutdown;
+    api.current.hello = startHello;
+  }, [connect, reconnect, handleFrame, flush, shutdown, startHello]);
 
   const startHost = useCallback(async () => {
     over.current = false;
+    touch();
     setPhase("wait");
     const S = C.newSecret();
     secret.current = S;
     destroyTicket.current = C.deriveTicket(S, "destroy");
     link.current = "";
-    const seat = C.b64u.enc(C.newSecret());
-    const roomId = await L.createRoom(C.deriveTicket(S, "invite"), destroyTicket.current, C.hashTicket(seat));
-    if (!roomId) {
+    const st = C.b64u.enc(C.newSecret());
+    const res = await L.createRoom(C.deriveTicket(S, "invite"), destroyTicket.current, C.hashTicket(st));
+    if (!res) {
       setPhase("idle");
       return;
     }
-    room.current = roomId;
+    room.current = res.room;
+    seat.current = st;
     isHost.current = true;
+    const exp = res.exp ? Date.parse(res.exp) : Date.now() + FALLBACK_TTL_MS;
+    setTtl({ ms: Math.max(1000, exp - Date.now()), key: exp });
     link.current = `${window.location.origin}/#${C.b64u.enc(S)}`;
     setLinkUrl(link.current);
-    subscribe(roomId, seat, () => {});
-  }, [subscribe]);
+    api.current.connect();
+  }, [touch]);
 
   const startGuest = useCallback(
     async (frag: string) => {
       over.current = false;
+      touch();
       const S = C.b64u.dec(frag);
       if (S.length !== 32) {
         setPhase("dead");
@@ -272,28 +403,24 @@ export default function Page() {
       }
       secret.current = S;
       destroyTicket.current = C.deriveTicket(S, "destroy");
-      const seat = C.b64u.enc(C.newSecret());
-      const roomId = await L.claimRoom(C.deriveTicket(S, "invite"), C.hashTicket(seat));
-      if (!roomId) {
-        secret.current.fill(0);
+      const st = C.b64u.enc(C.newSecret());
+      const res = await L.claimRoom(C.deriveTicket(S, "invite"), C.hashTicket(st));
+      if (!res) {
+        S.fill(0);
         secret.current = null;
         setPhase("dead");
         return;
       }
-      room.current = roomId;
+      room.current = res.room;
+      seat.current = st;
       isHost.current = false;
+      const exp = res.exp ? Date.parse(res.exp) : Date.now() + FALLBACK_TTL_MS;
+      setTtl({ ms: Math.max(1000, exp - Date.now()), key: exp });
       setPhase("wait");
-      subscribe(roomId, seat, () => {
-        const e = C.newEphemeral();
-        eph.current = e;
-        const hello = () => {
-          if (!sess.current && eph.current) send({ k: "h", pk: C.b64u.enc(eph.current.pk) });
-        };
-        hello();
-        retry.current = window.setInterval(hello, 1300);
-      });
+
+      api.current.connect();
     },
-    [send, subscribe],
+    [sendFrame, touch],
   );
 
   useEffect(() => {
@@ -302,6 +429,35 @@ export default function Page() {
     if (frag) void startGuest(frag);
     else setPhase("idle");
   }, [startGuest]);
+
+  // zniknięcie przy utracie fokusu / schowaniu karty
+  useEffect(() => {
+    const update = () => setDim(document.visibilityState !== "visible" || !document.hasFocus());
+    window.addEventListener("blur", update);
+    window.addEventListener("focus", update);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      window.removeEventListener("blur", update);
+      window.removeEventListener("focus", update);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, []);
+
+  // bezczynność
+  useEffect(() => {
+    const iv = window.setInterval(() => {
+      if (over.current) return;
+      if (Date.now() - lastAct.current > IDLE_BURN_MS) api.current.shutdown(true);
+    }, 20000);
+    return () => window.clearInterval(iv);
+  }, []);
+
+  // koniec życia pokoju
+  useEffect(() => {
+    if (!ttl) return;
+    const t = window.setTimeout(() => api.current.shutdown(false), ttl.ms + 500);
+    return () => window.clearTimeout(t);
+  }, [ttl]);
 
   useEffect(() => {
     if (phase !== "dead") return;
@@ -316,36 +472,19 @@ export default function Page() {
     feedEnd.current?.scrollIntoView({ block: "end" });
   }, [msgs]);
 
-  const hardReset = useCallback(() => {
-    setPhase("idle");
-    window.location.replace("/");
-    window.setTimeout(() => window.location.reload(), 300);
+  const startPeek = useCallback(() => {
+    touch();
+    if (peekT.current !== null) return;
+    peekT.current = window.setTimeout(() => setPeek(true), 180);
+  }, [touch]);
+
+  const endPeek = useCallback(() => {
+    if (peekT.current !== null) {
+      window.clearTimeout(peekT.current);
+      peekT.current = null;
+    }
+    setPeek(false);
   }, []);
-
-  useEffect(() => {
-    resetRef.current = hardReset;
-  }, [hardReset]);
-
-  const shutdown = useCallback(
-    (tell: boolean) => {
-      const d = destroyTicket.current;
-      wipe({ tell });
-      const go = () => hardReset();
-      if (!d) {
-        go();
-        return;
-      }
-      const bail = new Promise<void>((r) => window.setTimeout(r, 1200));
-      void Promise.race([L.destroyRoom(d), bail]).then(go, go);
-    },
-    [wipe, hardReset],
-  );
-
-  useEffect(() => {
-    shutdownRef.current = shutdown;
-  }, [shutdown]);
-
-  const burn = useCallback(() => shutdown(true), [shutdown]);
 
   const copy = useCallback(() => {
     if (!link.current) return;
@@ -362,26 +501,39 @@ export default function Page() {
     const s = sess.current;
     const text = draft.trim();
     if (!s || !text) return;
+    touch();
+    let frame: C.Frame;
     try {
-      send(s.encrypt(C.KIND_MSG, text));
-      push(true, text);
-      setDraft("");
+      frame = s.encrypt(C.KIND_MSG, text);
     } catch {
-      /* nic */
+      return;
     }
-  }, [draft, push, send]);
+    const id = ++counter.current;
+    setMsgs((m) => [...m, { id, mine: true, text, sent: false }]);
+    setDraft("");
+    pending.current.set(id, frame);
+    void sendFrame(frame).then((ok) => {
+      if (ok) markSent(id);
+    });
+  }, [draft, markSent, sendFrame, touch]);
 
-  const live = phase === "chat";
+  const liveNow = phase === "chat";
   const waiting = phase === "wait";
+  const blocked = !uplink || peerGone;
 
   return (
     <main
-      className={`app${peek ? " peek" : ""}`}
+      className={`app${peek ? " peek" : ""}${dim ? " dim" : ""}${blocked ? " held" : ""}`}
       onPointerDown={startPeek}
       onPointerUp={endPeek}
       onPointerLeave={endPeek}
       onPointerCancel={endPeek}
+      onKeyDown={touch}
     >
+      {ttl && (liveNow || waiting) ? (
+        <div className="ttl" key={ttl.key} style={{ animationDuration: `${ttl.ms}ms` }} aria-hidden="true" />
+      ) : null}
+
       <header className="bar">
         <span className={`dot${peer ? " on" : ""}`} aria-hidden="true" />
         <div className="acts">
@@ -390,8 +542,8 @@ export default function Page() {
               {copied ? I.check : I.copy}
             </button>
           ) : null}
-          {live || waiting ? (
-            <button className="ic danger" onClick={burn} aria-label="delete" title="delete">
+          {liveNow || waiting ? (
+            <button className="ic danger" onClick={() => api.current.shutdown(true)} aria-label="delete" title="delete">
               {I.trash}
             </button>
           ) : null}
@@ -406,7 +558,7 @@ export default function Page() {
         ) : null}
         {phase === "dead" ? <span className="dead" aria-hidden="true" /> : null}
         {waiting ? <span className="pulse" aria-hidden="true" /> : null}
-        {live ? (
+        {liveNow ? (
           <div className="feed">
             {fp.length ? (
               <div className="fp" aria-hidden="true">
@@ -416,7 +568,7 @@ export default function Page() {
               </div>
             ) : null}
             {msgs.map((m) => (
-              <div key={m.id} className={`b ${m.mine ? "me" : "you"}`}>
+              <div key={m.id} className={`b ${m.mine ? "me" : "you"}${m.sent ? "" : " unsent"}`}>
                 {m.text}
               </div>
             ))}
@@ -425,23 +577,29 @@ export default function Page() {
         ) : null}
       </section>
 
-      {live ? (
+      {liveNow ? (
         <footer className="bar foot">
           <input
             className="inp"
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              touch();
+            }}
             onKeyDown={(e) => {
+              touch();
               if (e.key === "Enter") say();
             }}
+            disabled={blocked}
             aria-label="message"
             autoFocus
             autoComplete="off"
             autoCorrect="off"
+            autoCapitalize="off"
             spellCheck={false}
             enterKeyHint="send"
           />
-          <button className="ic send" onClick={say} aria-label="send" title="send">
+          <button className="ic send" onClick={say} disabled={blocked} aria-label="send" title="send">
             {I.send}
           </button>
         </footer>
