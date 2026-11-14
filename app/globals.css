@@ -202,11 +202,28 @@ body {
   padding: 0;
   background: none;
   border-radius: 0;
-  color: var(--a);
+  color: transparent;
+  -webkit-text-stroke: 0.5px #262626;
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  transition: color 0.12s ease;
   animation: rise 0.18s ease-out;
+}
+
+@supports not (-webkit-text-stroke: 0.5px #262626) {
+  .b {
+    color: #262626;
+  }
+}
+
+/* przytrzymanie = podgląd */
+.app.peek .b {
+  color: var(--a);
+  -webkit-text-stroke: 0;
 }
 
 .b.you {
@@ -242,7 +259,8 @@ body {
   border: 1px solid #262626;
   outline: none;
   background: #000000;
-  color: #b8b8b8;
+  color: transparent;
+  -webkit-text-stroke: 0.5px #262626;
   caret-color: #ffffff;
   font-family: inherit;
   font-size: 15px;
@@ -253,6 +271,17 @@ body {
 
 .inp:focus {
   border-color: #4a4a4a;
+}
+
+@supports not (-webkit-text-stroke: 0.5px #262626) {
+  .inp {
+    color: #2a2a2a;
+  }
+}
+
+.app.peek .inp {
+  color: #b8b8b8;
+  -webkit-text-stroke: 0;
 }
 
 .inp::placeholder {

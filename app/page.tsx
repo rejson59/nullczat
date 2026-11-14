@@ -46,6 +46,7 @@ export default function Page() {
   const [peer, setPeer] = useState(false);
   const [fp, setFp] = useState<string[]>([]);
   const [linkUrl, setLinkUrl] = useState("");
+  const [peek, setPeek] = useState(false);
 
   const sess = useRef<C.Session | null>(null);
   const chan = useRef<RealtimeChannel | null>(null);
@@ -60,9 +61,23 @@ export default function Page() {
   const over = useRef(false);
   const counter = useRef(0);
   const feedEnd = useRef<HTMLDivElement | null>(null);
+  const peekT = useRef<number | null>(null);
 
   const resetRef = useRef<() => void>(() => {});
   const shutdownRef = useRef<(tell: boolean) => void>(() => {});
+
+  const startPeek = useCallback(() => {
+    if (peekT.current !== null) return;
+    peekT.current = window.setTimeout(() => setPeek(true), 180);
+  }, []);
+
+  const endPeek = useCallback(() => {
+    if (peekT.current !== null) {
+      window.clearTimeout(peekT.current);
+      peekT.current = null;
+    }
+    setPeek(false);
+  }, []);
 
   const push = useCallback((mine: boolean, text: string) => {
     setMsgs((m) => [...m, { id: ++counter.current, mine, text }]);
@@ -360,7 +375,13 @@ export default function Page() {
   const waiting = phase === "wait";
 
   return (
-    <main className="app">
+    <main
+      className={`app${peek ? " peek" : ""}`}
+      onPointerDown={startPeek}
+      onPointerUp={endPeek}
+      onPointerLeave={endPeek}
+      onPointerCancel={endPeek}
+    >
       <header className="bar">
         <span className={`dot${peer ? " on" : ""}`} aria-hidden="true" />
         <div className="acts">
