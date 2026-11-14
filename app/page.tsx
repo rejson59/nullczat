@@ -62,13 +62,14 @@ export default function Page() {
   const feedEnd = useRef<HTMLDivElement | null>(null);
 
   const resetRef = useRef<() => void>(() => {});
+  const shutdownRef = useRef<(tell: boolean) => void>(() => {});
 
   const push = useCallback((mine: boolean, text: string) => {
     setMsgs((m) => [...m, { id: ++counter.current, mine, text }]);
   }, []);
 
   const wipe = useCallback(
-    (opts: { tell: boolean; server: boolean }) => {
+    (opts: { tell: boolean }) => {
       if (over.current) return;
       over.current = true;
 
@@ -112,10 +113,6 @@ export default function Page() {
       setPeer(false);
       setLinkUrl("");
 
-      if (opts.server && destroyTicket.current) {
-        void L.destroyRoom(destroyTicket.current);
-      }
-      destroyTicket.current = "";
 
       try {
         window.localStorage.clear();
@@ -195,8 +192,7 @@ export default function Page() {
       if (!out) return;
 
       if (out.kind === C.KIND_BURN) {
-        wipe({ tell: false, server: true });
-        resetRef.current();
+        shutdownRef.current(false);
         return;
       }
       if (out.kind === C.KIND_MSG) {
@@ -315,10 +311,26 @@ export default function Page() {
     resetRef.current = hardReset;
   }, [hardReset]);
 
-  const burn = useCallback(() => {
-    wipe({ tell: true, server: true });
-    hardReset();
-  }, [wipe, hardReset]);
+  const shutdown = useCallback(
+    (tell: boolean) => {
+      const d = destroyTicket.current;
+      wipe({ tell });
+      const go = () => hardReset();
+      if (!d) {
+        go();
+        return;
+      }
+      const bail = new Promise<void>((r) => window.setTimeout(r, 1200));
+      void Promise.race([L.destroyRoom(d), bail]).then(go, go);
+    },
+    [wipe, hardReset],
+  );
+
+  useEffect(() => {
+    shutdownRef.current = shutdown;
+  }, [shutdown]);
+
+  const burn = useCallback(() => shutdown(true), [shutdown]);
 
   const copy = useCallback(() => {
     if (!link.current) return;
