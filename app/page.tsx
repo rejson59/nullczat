@@ -59,6 +59,8 @@ export default function Page() {
   const [peer, setPeer] = useState(false);
   const [peerGone, setPeerGone] = useState(false);
   const [skull, setSkull] = useState(false);
+  const [hint, setHint] = useState(false);
+  const [hintId, setHintId] = useState(-1);
   const [fp, setFp] = useState<string[]>([]);
   const [linkUrl, setLinkUrl] = useState("");
   const [peek, setPeek] = useState(false);
@@ -86,6 +88,7 @@ export default function Page() {
   const pending = useRef<Map<number, C.Frame>>(new Map());
   const lastAct = useRef(Date.now());
   const peerSeen = useRef(false);
+  const hintDone = useRef(false);
   const goneT = useRef<number | null>(null);
 
   // Wywołania między funkcjami, które nie mogą się odwołać do siebie nawzajem.
@@ -469,6 +472,20 @@ export default function Page() {
     return () => window.clearTimeout(t);
   }, [ttl]);
 
+  // jednorazowa demonstracja: przytrzymanie rozjaśnia tekst
+  useEffect(() => {
+    if (phase !== "chat" || hintDone.current || msgs.length === 0) return;
+    hintDone.current = true;
+    const target = msgs[msgs.length - 1].id;
+    setHintId(target);
+    // timery celowo nie są czyszczone w cleanupie: nowa wiadomość nie może przerwać
+    // trwającej demonstracji, a same gasną po 4,25 s
+    window.setTimeout(() => setHint(true), 650);
+    window.setTimeout(() => setHint(false), 2150);
+    window.setTimeout(() => setHint(true), 2750);
+    window.setTimeout(() => setHint(false), 4250);
+  }, [phase, msgs]);
+
   useEffect(() => {
     if (!peerGone) {
       setSkull(false);
@@ -542,7 +559,7 @@ export default function Page() {
 
   return (
     <main
-      className={`app${peek ? " peek" : ""}${dim ? " dim" : ""}${blocked ? " held" : ""}`}
+      className={`app${peek ? " peek" : ""}${hint ? " demo" : ""}${dim ? " dim" : ""}${blocked ? " held" : ""}`}
       onPointerDown={startPeek}
       onPointerUp={endPeek}
       onPointerLeave={endPeek}
@@ -589,6 +606,7 @@ export default function Page() {
             {msgs.map((m) => (
               <div key={m.id} className={`b ${m.mine ? "me" : "you"}${m.sent ? "" : " unsent"}`}>
                 {m.text}
+                {hint && m.id === hintId ? <span className="hint" aria-hidden="true" /> : null}
               </div>
             ))}
             <div ref={feedEnd} />

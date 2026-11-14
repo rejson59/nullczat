@@ -372,3 +372,60 @@ body {
     transform: translate(-50%, 0);
   }
 }
+
+/* --- jednorazowa podpowiedź: przytrzymaj, żeby rozjaśnić --------------- */
+.app.demo .b {
+  color: var(--a);
+  -webkit-text-stroke: 0;
+}
+
+.b {
+  position: relative;
+}
+
+.hint {
+  position: absolute;
+  left: -15px;
+  top: 50%;
+  width: 34px;
+  height: 34px;
+  margin-top: -17px;
+  border: 1px solid #343434;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: press 1.5s ease-in-out both;
+}
+
+.hint::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  border-radius: 50%;
+  background: #4a4a4a;
+}
+
+@keyframes press {
+  0% {
+    transform: scale(1.18);
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.95;
+  }
+  46% {
+    transform: scale(0.74);
+    opacity: 1;
+  }
+  72% {
+    transform: scale(0.74);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.18);
+    opacity: 0;
+  }
+}
