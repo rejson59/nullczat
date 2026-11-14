@@ -277,3 +277,64 @@ Szyfrowanie jest bezużyteczne, jeśli obok wjeżdża Google Analytics i skrypt 
 4. **Zakres:** tylko 1:1 na start, czy od razu grupy do ~8 osób?
 
 Po Twojej decyzji siadam do implementacji: najpierw silnik + testy wektorowe, potem UI, potem transport.
+
+---
+
+## 10. Co faktycznie stoi (v1) — stan po decyzjach
+
+Wybrane: **A+ z linkiem jednorazowym**, zniszczenie dla wszystkich, 1:1, Supabase + Vercel.
+
+### Przepływ
+
+```
+1. „+"  → przeglądarka losuje S (256 bit)
+2. serwer dostaje TYLKO: SHA256(T_invite), SHA256(T_destroy), SHA256(seat)
+   — nigdy S, nigdy klucz, nigdy treść
+3. link = https://…/#<base64url(S)>   ← fragment nie idzie w nagłówku HTTP
+4. druga osoba otwiera link → claim (atomowy, jednorazowy) → para
+5. X25519 efemeryczne + PSK(S) → klucz główny → S zerowane po obu stronach
+6. wiadomości: osobny łańcuch HMAC na kierunek, klucz per wiadomość,
+   XChaCha20-Poly1305, dopełnianie do 256 B, AAD = room|kierunek|indeks
+7. kosz → ramka „burn" (uwierzytelniona AEAD) → obie strony zerują klucze,
+   odpinają kanał, kasują pokój w bazie, przeładowują kontekst
+```
+
+### Czego w bazie NIE MA
+
+- **Tabeli wiadomości.** Treść nigdy nie dotyka dysku: przechodzi tylko przez
+  ulotny pub/sub Supabase Realtime (pamięć, bez persystencji).
+- Kluczy, haseł, maili, nicków, historii. Zostają wyłącznie dwa wiersze:
+  pokój (hash biletu) i miejsca (hash). Oba kasowane przy zniszczeniu,
+  po 2 h przez TTL, a osierocone przez `pg_cron` co 10 min.
+
+### Reguły potwierdzone testem
+
+| Test | Wynik |
+|---|---|
+| link → S → te same bilety | OK |
+| DH zgodne po obu stronach | OK |
+| fingerprint zgodny (4 kolory) | OK |
+| wiadomości w obie strony, kolejność, out-of-order, replay | OK |
+| podmiana bitu w ciphertext | odrzucone |
+| link użyty drugi raz | odrzucone |
+| link po zniszczeniu pokoju | odrzucone |
+| link po TTL | odrzucone |
+| zniszczenie złym biletem | odrzucone |
+
+### Ograniczenia, które zostają
+
+| Ograniczenie | Dlaczego |
+|---|---|
+| **Kto pierwszy otworzy link, ten wchodzi** | Link jest nośnikiem PSK. Dlatego obie strony widzą 4 kropki (fingerprint) — trzeba je porównać na żywo. To jedyna obrona przed podstawieniem się. |
+| Brak wiadomości offline | Kanał jest ulotny z założenia: brak historii = brak treści do wydania. |
+| Odświeżenie karty kończy pokój | Nic nie jest zapisywane w localStorage/IndexedDB — celowo. |
+| Metadane (IP, czas, długość) | Supabase/Vercel je widzą. Długość maskowana dopełnianiem, IP nie da się ukryć bez Tor/VPN. |
+| `script-src 'unsafe-inline'` w CSP | Wymóg Next.js bez nonce. Do usunięcia w v2. |
+| Screenshot / drugi uczestnik / XSS | Poza zasięgiem każdej aplikacji webowej. |
+
+### Do zrobienia dalej
+
+1. Podmiana `unsafe-inline` na nonce + `strict-dynamic`.
+2. DH-ratchet (Double Ratchet) zamiast samego łańcucha symetrycznego.
+3. Hybryda post-quantum (X25519 + ML-KEM-768), gdy WebCrypto to udźwignie.
+4. Własna domena — `nullczat.vercel.app` jest zajęta przez inny projekt Vercel.
