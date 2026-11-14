@@ -41,6 +41,21 @@ const I = {
       <path d="M5 19L19 5M19 5h-8M19 5v8" strokeLinecap="square" />
     </svg>
   ),
+  hand: (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11.2 13.4V5.5a1.45 1.45 0 0 1 2.9 0v7.2" />
+      <path d="M14.1 12.4h2.2a1.35 1.35 0 0 1 1.35 1.35v1.35" />
+      <path d="M17.65 15.1a1.3 1.3 0 0 1 1.3 1.3v1.35c0 2.8-1.95 4.75-4.75 4.75h-1.9c-1.4 0-2.55-.55-3.4-1.7l-2.55-3.35a1.4 1.4 0 0 1 2.05-1.9l1.8 1.6" />
+    </svg>
+  ),
+  gone: (
+    <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2">
+      <path d="M12 3.2c-4.3 0-7.7 3.1-7.7 7 0 2.5 1.2 4.3 2.9 5.4v2.3c0 .9.7 1.6 1.6 1.6h6.4c.9 0 1.6-.7 1.6-1.6v-2.3c1.7-1.1 2.9-2.9 2.9-5.4 0-3.9-3.4-7-7.7-7z" strokeLinejoin="round" />
+      <circle cx="9.3" cy="10" r="1.35" />
+      <circle cx="14.7" cy="10" r="1.35" />
+      <path d="M12 13v1.6M10.4 17.4v2.2M13.6 17.4v2.2" strokeLinecap="round" />
+    </svg>
+  ),
   skull: (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3">
       <path d="M12 3.2c-4.3 0-7.7 3.1-7.7 7 0 2.5 1.2 4.3 2.9 5.4v2.3c0 .9.7 1.6 1.6 1.6h6.4c.9 0 1.6-.7 1.6-1.6v-2.3c1.7-1.1 2.9-2.9 2.9-5.4 0-3.9-3.4-7-7.7-7z" strokeLinejoin="round" />
@@ -60,7 +75,6 @@ export default function Page() {
   const [peerGone, setPeerGone] = useState(false);
   const [skull, setSkull] = useState(false);
   const [hint, setHint] = useState(false);
-  const [hintId, setHintId] = useState(-1);
   const [fp, setFp] = useState<string[]>([]);
   const [linkUrl, setLinkUrl] = useState("");
   const [peek, setPeek] = useState(false);
@@ -476,8 +490,6 @@ export default function Page() {
   useEffect(() => {
     if (phase !== "chat" || hintDone.current || msgs.length === 0) return;
     hintDone.current = true;
-    const target = msgs[msgs.length - 1].id;
-    setHintId(target);
     // timery celowo nie są czyszczone w cleanupie: nowa wiadomość nie może przerwać
     // trwającej demonstracji, a same gasną po 4,25 s
     window.setTimeout(() => setHint(true), 650);
@@ -587,12 +599,18 @@ export default function Page() {
       </header>
 
       <section className="stage">
+        {hint && liveNow ? (
+          <div className="teach" aria-hidden="true">
+            <span className="ring" />
+            <span className="hand">{I.hand}</span>
+          </div>
+        ) : null}
         {phase === "idle" || phase === "boot" ? (
           <button className="plus" onClick={startHost} aria-label="new" title="new">
             {I.plus}
           </button>
         ) : null}
-        {phase === "dead" ? <span className="dead" aria-hidden="true" /> : null}
+        {phase === "dead" ? <span className="gone" aria-hidden="true">{I.gone}</span> : null}
         {waiting ? <span className="pulse" aria-hidden="true" /> : null}
         {liveNow ? (
           <div className="feed">
@@ -606,7 +624,6 @@ export default function Page() {
             {msgs.map((m) => (
               <div key={m.id} className={`b ${m.mine ? "me" : "you"}${m.sent ? "" : " unsent"}`}>
                 {m.text}
-                {hint && m.id === hintId ? <span className="hint" aria-hidden="true" /> : null}
               </div>
             ))}
             <div ref={feedEnd} />
