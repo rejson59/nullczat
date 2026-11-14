@@ -41,6 +41,14 @@ const I = {
       <path d="M5 19L19 5M19 5h-8M19 5v8" strokeLinecap="square" />
     </svg>
   ),
+  skull: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3">
+      <path d="M12 3.2c-4.3 0-7.7 3.1-7.7 7 0 2.5 1.2 4.3 2.9 5.4v2.3c0 .9.7 1.6 1.6 1.6h6.4c.9 0 1.6-.7 1.6-1.6v-2.3c1.7-1.1 2.9-2.9 2.9-5.4 0-3.9-3.4-7-7.7-7z" strokeLinejoin="round" />
+      <circle cx="9.3" cy="10" r="1.35" />
+      <circle cx="14.7" cy="10" r="1.35" />
+      <path d="M12 13v1.6M10.4 17.4v2.2M13.6 17.4v2.2" strokeLinecap="round" />
+    </svg>
+  ),
 };
 
 export default function Page() {
@@ -50,6 +58,7 @@ export default function Page() {
   const [copied, setCopied] = useState(false);
   const [peer, setPeer] = useState(false);
   const [peerGone, setPeerGone] = useState(false);
+  const [skull, setSkull] = useState(false);
   const [fp, setFp] = useState<string[]>([]);
   const [linkUrl, setLinkUrl] = useState("");
   const [peek, setPeek] = useState(false);
@@ -156,6 +165,7 @@ export default function Page() {
     setFp([]);
     setPeer(false);
     setPeerGone(false);
+    setSkull(false);
     setLinkUrl("");
     setTtl(null);
   }, []);
@@ -460,6 +470,15 @@ export default function Page() {
   }, [ttl]);
 
   useEffect(() => {
+    if (!peerGone) {
+      setSkull(false);
+      return;
+    }
+    const t = window.setTimeout(() => setSkull(true), 1400);
+    return () => window.clearTimeout(t);
+  }, [peerGone]);
+
+  useEffect(() => {
     if (phase !== "dead") return;
     const t = window.setTimeout(() => {
       over.current = false;
@@ -576,6 +595,12 @@ export default function Page() {
           </div>
         ) : null}
       </section>
+
+      {skull && liveNow ? (
+        <span className="skull" aria-hidden="true">
+          {I.skull}
+        </span>
+      ) : null}
 
       {liveNow ? (
         <footer className="bar foot">
