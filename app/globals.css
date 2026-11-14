@@ -1,0 +1,264 @@
+:root {
+  color-scheme: dark;
+  --bg: #000000;
+  --ink: #000000;
+  --a: #9c9c9c;
+  --b: #bcbcbc;
+  --t: #3a3a3a;
+  --s: #6e6e6e;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--t);
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+::selection {
+  background: #ffffff;
+  color: #000000;
+}
+
+.app {
+  height: 100dvh;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: env(safe-area-inset-top) 20px env(safe-area-inset-bottom);
+  display: flex;
+  flex-direction: column;
+}
+
+.bar {
+  flex: 0 0 auto;
+  height: 62px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #171717;
+  transition: background 0.4s ease, box-shadow 0.4s ease;
+}
+
+.dot.on {
+  background: #ededed;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.35);
+}
+
+.acts {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ic {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #4d4d4d;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: color 0.18s ease, background 0.18s ease;
+}
+
+.ic:hover {
+  color: #f2f2f2;
+  background: #101010;
+}
+
+.ic:active {
+  transform: scale(0.94);
+}
+
+.ic.danger:hover {
+  color: #ff3b30;
+  background: #140404;
+}
+
+.stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.plus {
+  appearance: none;
+  border: 1px solid #1a1a1a;
+  background: transparent;
+  color: #565656;
+  width: 104px;
+  height: 104px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: border-color 0.25s ease, color 0.25s ease, transform 0.15s ease;
+}
+
+.plus:hover {
+  border-color: #454545;
+  color: #ffffff;
+}
+
+.plus:active {
+  transform: scale(0.96);
+}
+
+.pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #2a2a2a;
+  animation: breathe 1.9s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+.dead {
+  width: 8px;
+  height: 8px;
+  background: #ff3b30;
+  animation: fade 2.2s ease forwards;
+}
+
+@keyframes fade {
+  0% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.feed {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 7px;
+  padding: 12px 0 20px;
+  scrollbar-width: none;
+}
+
+.feed::-webkit-scrollbar {
+  display: none;
+}
+
+.fp {
+  display: flex;
+  gap: 7px;
+  padding: 0 2px 16px;
+  opacity: 0.5;
+}
+
+.fp i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: block;
+}
+
+.b {
+  max-width: 76%;
+  padding: 10px 14px;
+  border-radius: 3px;
+  color: var(--ink);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  animation: rise 0.18s ease-out;
+}
+
+.b.you {
+  align-self: flex-start;
+  background: var(--a);
+}
+
+.b.me {
+  align-self: flex-end;
+  background: var(--b);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.foot {
+  gap: 6px;
+  height: auto;
+  padding: 10px 0 18px;
+  align-items: center;
+}
+
+.inp {
+  flex: 1 1 auto;
+  min-width: 0;
+  appearance: none;
+  border: 0;
+  outline: none;
+  background: #8f8f8f;
+  color: #000000;
+  caret-color: #000000;
+  font-family: inherit;
+  font-size: 15px;
+  padding: 13px 14px;
+  border-radius: 3px;
+}
+
+.inp::placeholder {
+  color: transparent;
+}
+
+.send {
+  color: #6e6e6e;
+}
+
+.send:hover {
+  color: #ffffff;
+}
