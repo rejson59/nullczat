@@ -41,6 +41,12 @@ const I = {
       <path d="M5 19L19 5M19 5h-8M19 5v8" strokeLinecap="square" />
     </svg>
   ),
+  buzz: (
+    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4">
+      <rect x="9" y="4.5" width="6" height="15" rx="1.5" />
+      <path d="M5.6 8.6c-1.3 1.9-1.3 4.9 0 6.8M18.4 8.6c1.3 1.9 1.3 4.9 0 6.8" strokeLinecap="round" />
+    </svg>
+  ),
   hand: (
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round">
       <path d="M11.2 13.4V5.5a1.45 1.45 0 0 1 2.9 0v7.2" />
@@ -75,6 +81,8 @@ export default function Page() {
   const [peerGone, setPeerGone] = useState(false);
   const [skull, setSkull] = useState(false);
   const [hint, setHint] = useState(false);
+  const [buzz, setBuzz] = useState(false);
+  const [goneLeft, setGoneLeft] = useState(0);
   const [fp, setFp] = useState<string[]>([]);
   const [linkUrl, setLinkUrl] = useState("");
   const [peek, setPeek] = useState(false);
@@ -103,7 +111,6 @@ export default function Page() {
   const lastAct = useRef(Date.now());
   const peerSeen = useRef(false);
   const hintDone = useRef(false);
-  const goneT = useRef<number | null>(null);
 
   // Wywołania między funkcjami, które nie mogą się odwołać do siebie nawzajem.
   const api = useRef({
@@ -114,6 +121,20 @@ export default function Page() {
     shutdown: (_: boolean) => {},
     hello: () => {},
   });
+
+  const buzzRef = useRef(false);
+  useEffect(() => {
+    buzzRef.current = buzz;
+  }, [buzz]);
+
+  const pulse = useCallback((pattern: number | number[]) => {
+    if (!buzzRef.current) return;
+    try {
+      navigator.vibrate?.(pattern);
+    } catch {
+      /* nic */
+    }
+  }, []);
 
   const touch = useCallback(() => {
     lastAct.current = Date.now();
@@ -149,10 +170,8 @@ export default function Page() {
   const teardown = useCallback(() => {
     if (helloT.current !== null) window.clearInterval(helloT.current);
     if (reconnT.current !== null) window.clearTimeout(reconnT.current);
-    if (goneT.current !== null) window.clearTimeout(goneT.current);
     helloT.current = null;
     reconnT.current = null;
-    goneT.current = null;
 
     sess.current?.destroy();
     sess.current = null;
@@ -288,17 +307,19 @@ export default function Page() {
       if (!out) return;
 
       if (out.kind === C.KIND_BURN) {
+        pulse([50, 40, 70]);
         api.current.shutdown(false);
         return;
       }
       if (out.kind === C.KIND_MSG) {
+        pulse(26);
         pushIn(out.text);
         setPhase("chat");
         return;
       }
       if (out.kind === C.KIND_PING) setPhase("chat");
     },
-    [pushIn, sendFrame],
+    [pushIn, sendFrame, pulse],
   );
 
   const reconnect = useCallback(() => {
@@ -339,16 +360,8 @@ export default function Page() {
       if (other) {
         peerSeen.current = true;
         setPeerGone(false);
-        if (goneT.current !== null) {
-          window.clearTimeout(goneT.current);
-          goneT.current = null;
-        }
-      } else if (peerSeen.current && goneT.current === null) {
+      } else if (peerSeen.current) {
         setPeerGone(true);
-        goneT.current = window.setTimeout(() => {
-          goneT.current = null;
-          api.current.shutdown(false);
-        }, PEER_GONE_MS);
       }
     });
 
@@ -482,9 +495,39 @@ export default function Page() {
   // koniec życia pokoju
   useEffect(() => {
     if (!ttl) return;
-    const t = window.setTimeout(() => api.current.shutdown(false), ttl.ms + 500);
+    const t = window.setTimeout(() => {
+      if (sess.current) {
+        api.current.shutdown(false);
+        return;
+      }
+      const d = destroyTicket.current;
+      teardown();
+      destroyTicket.current = "";
+      over.current = true;
+      setPhase("dead");
+      if (d) void L.destroyRoom(d);
+    }, ttl.ms + 500);
     return () => window.clearTimeout(t);
-  }, [ttl]);
+  }, [ttl, teardown]);
+
+  // odliczanie po zniknięciu rozmówcy
+  useEffect(() => {
+    if (!peerGone) {
+      setGoneLeft(0);
+      return;
+    }
+    const start = Date.now();
+    setGoneLeft(Math.ceil(PEER_GONE_MS / 1000));
+    const iv = window.setInterval(() => {
+      const left = Math.max(0, Math.ceil((PEER_GONE_MS - (Date.now() - start)) / 1000));
+      setGoneLeft(left);
+      if (left === 0) {
+        window.clearInterval(iv);
+        api.current.shutdown(false);
+      }
+    }, 250);
+    return () => window.clearInterval(iv);
+  }, [peerGone]);
 
   // jednorazowa demonstracja: przytrzymanie rozjaśnia tekst
   useEffect(() => {
@@ -567,7 +610,7 @@ export default function Page() {
 
   const liveNow = phase === "chat";
   const waiting = phase === "wait";
-  const blocked = !uplink || peerGone;
+  const blocked = !uplink;
 
   return (
     <main
@@ -588,6 +631,17 @@ export default function Page() {
           {waiting && linkUrl ? (
             <button className="ic" onClick={copy} aria-label="copy" title="copy">
               {copied ? I.check : I.copy}
+            </button>
+          ) : null}
+          {liveNow || waiting ? (
+            <button
+              className={`ic buzz${buzz ? " on" : ""}`}
+              onClick={() => setBuzz((v) => !v)}
+              aria-label="vibrate"
+              aria-pressed={buzz}
+              title="vibrate"
+            >
+              {I.buzz}
             </button>
           ) : null}
           {liveNow || waiting ? (
@@ -634,6 +688,7 @@ export default function Page() {
       {skull && liveNow ? (
         <span className="skull" aria-hidden="true">
           {I.skull}
+          <b className="secs">{goneLeft}</b>
         </span>
       ) : null}
 
