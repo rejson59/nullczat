@@ -48,6 +48,12 @@ const I = {
       <path d="M17.65 15.1a1.3 1.3 0 0 1 1.3 1.3v1.35c0 2.8-1.95 4.75-4.75 4.75h-1.9c-1.4 0-2.55-.55-3.4-1.7l-2.55-3.35a1.4 1.4 0 0 1 2.05-1.9l1.8 1.6" />
     </svg>
   ),
+  eye: (
+    <svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round">
+      <path d="M2.4 13c3.6-5.4 7.3-7.2 10.6-7.2S20 7.6 23.6 13c-3.6 5.4-7.3 7.2-10.6 7.2S6 18.4 2.4 13z" />
+      <circle cx="13" cy="13" r="2.6" fill="currentColor" stroke="none" />
+    </svg>
+  ),
   gone: (
     <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.2">
       <path d="M12 3.2c-4.3 0-7.7 3.1-7.7 7 0 2.5 1.2 4.3 2.9 5.4v2.3c0 .9.7 1.6 1.6 1.6h6.4c.9 0 1.6-.7 1.6-1.6v-2.3c1.7-1.1 2.9-2.9 2.9-5.4 0-3.9-3.4-7-7.7-7z" strokeLinejoin="round" />
@@ -79,6 +85,7 @@ export default function Page() {
   const [fp, setFp] = useState<string[]>([]);
   const [linkUrl, setLinkUrl] = useState("");
   const [peek, setPeek] = useState(false);
+  const [typing, setTyping] = useState(false);
   const [dim, setDim] = useState(false);
   const [uplink, setUplink] = useState(true);
   const [ttl, setTtl] = useState<{ ms: number; key: number } | null>(null);
@@ -98,6 +105,8 @@ export default function Page() {
   const counter = useRef(0);
   const feedEnd = useRef<HTMLDivElement | null>(null);
   const peekT = useRef<number | null>(null);
+  const inpRef = useRef<HTMLInputElement | null>(null);
+  const peekFocus = useRef(false);
   const reconnT = useRef<number | null>(null);
   const reconnN = useRef(0);
   const pending = useRef<Map<number, C.Frame>>(new Map());
@@ -574,11 +583,21 @@ export default function Page() {
     feedEnd.current?.scrollIntoView({ block: "end" });
   }, [msgs]);
 
-  const startPeek = useCallback(() => {
-    touch();
-    if (peekT.current !== null) return;
-    peekT.current = window.setTimeout(() => setPeek(true), 180);
-  }, [touch]);
+  const startPeek = useCallback(
+    (e: React.PointerEvent<HTMLElement>) => {
+      touch();
+      const el = inpRef.current;
+      peekFocus.current = !!el && document.activeElement === el;
+      // trzymanie ekranu nie może odbierać fokusu polu tekstowemu — inaczej znika klawiatura.
+      // Tknięcia w samo pole zostawiamy systemowi (kursor, zaznaczanie).
+      const tg = e.target as Node | null;
+      const onField = !!el && !!tg && (tg === el || el.contains(tg));
+      if (peekFocus.current && !onField) e.preventDefault();
+      if (peekT.current !== null) return;
+      peekT.current = window.setTimeout(() => setPeek(true), 180);
+    },
+    [touch],
+  );
 
   const endPeek = useCallback(() => {
     if (peekT.current !== null) {
@@ -586,6 +605,11 @@ export default function Page() {
       peekT.current = null;
     }
     setPeek(false);
+    const el = inpRef.current;
+    if (peekFocus.current && el && document.activeElement !== el) {
+      el.focus({ preventScroll: true });
+    }
+    peekFocus.current = false;
   }, []);
 
   const copy = useCallback(() => {
@@ -655,7 +679,7 @@ export default function Page() {
       <section className="stage">
         {hint && liveNow ? (
           <div className="teach" aria-hidden="true">
-            <span className="ring" />
+            <span className="eye">{I.eye}</span>
             <span className="hand">{I.hand}</span>
           </div>
         ) : null}
@@ -695,8 +719,11 @@ export default function Page() {
       {liveNow ? (
         <footer className="bar foot">
           <input
-            className="inp"
+            ref={inpRef}
+            className={`inp${typing ? " on" : ""}`}
             value={draft}
+            onFocus={() => setTyping(true)}
+            onBlur={() => setTyping(false)}
             onChange={(e) => {
               setDraft(e.target.value);
               touch();

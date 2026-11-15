@@ -279,6 +279,12 @@ body {
   border-color: #4a4a4a;
 }
 
+/* gdy piszesz, widzisz, co piszesz; po utracie fokusu wraca kontur */
+.inp.on {
+  color: #b8b8b8;
+  -webkit-text-stroke: 0;
+}
+
 @supports not (-webkit-text-stroke: 0.5px #262626) {
   .inp {
     color: #2a2a2a;
@@ -411,28 +417,21 @@ body {
   pointer-events: none;
 }
 
-.teach .ring {
+.teach .eye {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 34px;
-  height: 34px;
-  margin: -17px 0 0 -17px;
-  border: 1px solid #3a3a3a;
-  border-radius: 50%;
-  animation: press 1.5s ease-in-out both;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  color: #5f5f5f;
+  animation: peekIn 1.5s ease-in-out both;
 }
 
-.teach .ring::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 4px;
-  height: 4px;
-  margin: -2px 0 0 -2px;
-  border-radius: 50%;
-  background: #525252;
+.teach .eye svg {
+  display: block;
+  transform-origin: 50% 50%;
+  animation: blink 1.5s ease-in-out both;
 }
 
 .teach .hand {
@@ -449,24 +448,41 @@ body {
   transform: rotate(180deg);
 }
 
-@keyframes press {
+@keyframes blink {
   0% {
-    transform: scale(1.2);
+    transform: scaleY(0.06);
+  }
+  24% {
+    transform: scaleY(0.06);
+  }
+  38% {
+    transform: scaleY(1);
+  }
+  58% {
+    transform: scaleY(1);
+  }
+  66% {
+    transform: scaleY(0.06);
+  }
+  78% {
+    transform: scaleY(1);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes peekIn {
+  0% {
     opacity: 0;
   }
-  20% {
+  18% {
     opacity: 1;
   }
-  46% {
-    transform: scale(0.72);
-    opacity: 1;
-  }
-  68% {
-    transform: scale(0.72);
+  86% {
     opacity: 1;
   }
   100% {
-    transform: scale(1.2);
     opacity: 0;
   }
 }
