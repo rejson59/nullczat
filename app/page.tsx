@@ -720,6 +720,7 @@ export default function Page() {
         <footer className="bar foot">
           <input
             ref={inpRef}
+            type="search"
             className={`inp${typing ? " on" : ""}`}
             value={draft}
             onFocus={() => setTyping(true)}
@@ -734,8 +735,14 @@ export default function Page() {
             }}
             disabled={blocked}
             aria-label="message"
+            aria-autocomplete="none"
             autoFocus
             autoComplete="off"
+            data-form-type="other"
+            data-lpignore="true"
+            data-1p-ignore="true"
+            data-bwignore="true"
+            data-protonpass-ignore="true"
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}

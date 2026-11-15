@@ -300,6 +300,16 @@ body {
   color: transparent;
 }
 
+/* type=search: żadnych ozdobników przeglądarki (lupa, krzyżyk) */
+.inp::-webkit-search-decoration,
+.inp::-webkit-search-cancel-button,
+.inp::-webkit-search-results-button,
+.inp::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
 .send {
   color: #6e6e6e;
 }
