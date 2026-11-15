@@ -41,12 +41,6 @@ const I = {
       <path d="M5 19L19 5M19 5h-8M19 5v8" strokeLinecap="square" />
     </svg>
   ),
-  buzz: (
-    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4">
-      <rect x="9" y="4.5" width="6" height="15" rx="1.5" />
-      <path d="M5.6 8.6c-1.3 1.9-1.3 4.9 0 6.8M18.4 8.6c1.3 1.9 1.3 4.9 0 6.8" strokeLinecap="round" />
-    </svg>
-  ),
   hand: (
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round">
       <path d="M11.2 13.4V5.5a1.45 1.45 0 0 1 2.9 0v7.2" />
@@ -81,7 +75,6 @@ export default function Page() {
   const [peerGone, setPeerGone] = useState(false);
   const [skull, setSkull] = useState(false);
   const [hint, setHint] = useState(false);
-  const [buzz, setBuzz] = useState(false);
   const [goneLeft, setGoneLeft] = useState(0);
   const [fp, setFp] = useState<string[]>([]);
   const [linkUrl, setLinkUrl] = useState("");
@@ -121,20 +114,6 @@ export default function Page() {
     shutdown: (_: boolean) => {},
     hello: () => {},
   });
-
-  const buzzRef = useRef(false);
-  useEffect(() => {
-    buzzRef.current = buzz;
-  }, [buzz]);
-
-  const pulse = useCallback((pattern: number | number[]) => {
-    if (!buzzRef.current) return;
-    try {
-      navigator.vibrate?.(pattern);
-    } catch {
-      /* nic */
-    }
-  }, []);
 
   const touch = useCallback(() => {
     lastAct.current = Date.now();
@@ -249,6 +228,40 @@ export default function Page() {
     [hardReset, sendFrame, teardown],
   );
 
+  const burnAway = useCallback(() => {
+    // window.open musi polecieć synchronicznie w geście, inaczej przeglądarka zablokuje kartę
+    let opened: Window | null = null;
+    try {
+      opened = window.open("https://www.google.com/", "_blank");
+      if (opened) opened.opener = null;
+    } catch {
+      opened = null;
+    }
+
+    if (over.current) {
+      window.location.replace(opened ? "about:blank" : "https://www.google.com/");
+      return;
+    }
+    over.current = true;
+
+    if (sess.current) {
+      try {
+        void sendFrame(sess.current.encrypt(C.KIND_BURN, ""));
+      } catch {
+        /* nic */
+      }
+    }
+
+    const d = destroyTicket.current;
+    destroyTicket.current = "";
+    if (d) void L.destroyRoom(d);
+
+    teardown();
+
+    const target = opened ? "about:blank" : "https://www.google.com/";
+    window.setTimeout(() => window.location.replace(target), 140);
+  }, [sendFrame, teardown]);
+
   const handleFrame = useCallback(
     (raw: unknown) => {
       if (!raw || over.current) return;
@@ -307,19 +320,17 @@ export default function Page() {
       if (!out) return;
 
       if (out.kind === C.KIND_BURN) {
-        pulse([50, 40, 70]);
         api.current.shutdown(false);
         return;
       }
       if (out.kind === C.KIND_MSG) {
-        pulse(26);
         pushIn(out.text);
         setPhase("chat");
         return;
       }
       if (out.kind === C.KIND_PING) setPhase("chat");
     },
-    [pushIn, sendFrame, pulse],
+    [pushIn, sendFrame],
   );
 
   const reconnect = useCallback(() => {
@@ -634,18 +645,7 @@ export default function Page() {
             </button>
           ) : null}
           {liveNow || waiting ? (
-            <button
-              className={`ic buzz${buzz ? " on" : ""}`}
-              onClick={() => setBuzz((v) => !v)}
-              aria-label="vibrate"
-              aria-pressed={buzz}
-              title="vibrate"
-            >
-              {I.buzz}
-            </button>
-          ) : null}
-          {liveNow || waiting ? (
-            <button className="ic danger" onClick={() => api.current.shutdown(true)} aria-label="delete" title="delete">
+            <button className="ic danger" onClick={burnAway} aria-label="delete" title="delete">
               {I.trash}
             </button>
           ) : null}

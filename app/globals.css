@@ -380,10 +380,6 @@ body {
   text-align: left;
 }
 
-.ic.buzz.on {
-  color: #ededed;
-}
-
 @keyframes skullIn {
   from {
     opacity: 0;
