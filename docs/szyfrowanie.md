@@ -294,7 +294,8 @@ Wybrane: **A+ z linkiem jednorazowym**, zniszczenie dla wszystkich, 1:1, Supabas
 4. druga osoba otwiera link → claim (atomowy, jednorazowy) → para
 5. X25519 efemeryczne + PSK(S) → klucz główny → S zerowane po obu stronach
 6. wiadomości: osobny łańcuch HMAC na kierunek, klucz per wiadomość,
-   XChaCha20-Poly1305, dopełnianie do 256 B, AAD = room|kierunek|indeks
+   XChaCha20-Poly1305, dopełnianie do 256 B, AAD = room|kierunek|epoka|indeks
+   + co 32 wiadomości nowa epoka z świeżym X25519 (DH-ratchet, patrz §12)
 7. kosz → ramka „burn" (uwierzytelniona AEAD) → obie strony zerują klucze,
    odpinają kanał, kasują pokój w bazie, przeładowują kontekst
 ```
@@ -303,9 +304,11 @@ Wybrane: **A+ z linkiem jednorazowym**, zniszczenie dla wszystkich, 1:1, Supabas
 
 - **Tabeli wiadomości.** Treść nigdy nie dotyka dysku: przechodzi tylko przez
   ulotny pub/sub Supabase Realtime (pamięć, bez persystencji).
-- Kluczy, haseł, maili, nicków, historii. Zostają wyłącznie dwa wiersze:
-  pokój (hash biletu) i miejsca (hash). Oba kasowane przy zniszczeniu,
-  po 2 h przez TTL, a osierocone przez `pg_cron` co 10 min.
+- Kluczy, haseł, maili, nicków, historii. Wiersze w bazie są **dwa i tylko
+  do momentu parowania**: pokój (hash biletu) i miejsca (hash). Gdy druga
+  osoba wejdzie, `nz_claim` kasuje je oba natychmiast — **przez całą rozmowę
+  baza nie zawiera o niej ani jednego wiersza**. Nieodebrane zaproszenia
+  sprząta TTL i `pg_cron` co 10 min.
 
 ### Reguły potwierdzone testem
 
@@ -334,10 +337,14 @@ Wybrane: **A+ z linkiem jednorazowym**, zniszczenie dla wszystkich, 1:1, Supabas
 
 ### Do zrobienia dalej
 
-1. Podmiana `unsafe-inline` na nonce + `strict-dynamic`.
-2. DH-ratchet (Double Ratchet) zamiast samego łańcucha symetrycznego.
-3. Hybryda post-quantum (X25519 + ML-KEM-768), gdy WebCrypto to udźwignie.
+1. ~~Podmiana `unsafe-inline` na nonce + `strict-dynamic`.~~ zrobione (§11)
+2. ~~DH-ratchet zamiast samego łańcucha symetrycznego.~~ zrobione (§12)
+3. ~~Hybryda post-quantum (X25519 + ML-KEM-768).~~ **niepotrzebne**: klucz
+   główny to `HKDF(S ‖ DH)`, a S (256 bit) nie opuszcza linku. Nawet złamanie
+   X25519 komputerem kwantowym nie daje klucza bez S. ML-KEM miałby sens
+   tylko w wariancie bez PSK.
 4. Własna domena — `nullczat.vercel.app` jest zajęta przez inny projekt Vercel.
+5. Zerowanie pamięci w JS jest ograniczone (patrz §12, „czego nie da się").
 
 ---
 
@@ -368,3 +375,64 @@ Wybrane: **A+ z linkiem jednorazowym**, zniszczenie dla wszystkich, 1:1, Supabas
 ### Świadomie odpuszczone
 
 Blokowanie screenshotów i „wykrywanie nagrywania ekranu" — w przeglądarce to teatr, który daje fałszywe poczucie bezpieczeństwa.
+
+---
+
+## 12. Hartowanie (v1.2) — DH-ratchet i destrukcja bez śladu
+
+### Co doszło
+
+**1. Nowa epoka co 32 wiadomości.** Sam łańcuch HMAC dawał *forward secrecy*
+(przeszłość jest bezpieczna), ale nie *post-compromise security*: kto ukradł
+aktualny stan, czytał wszystko dalej do końca rozmowy. Teraz:
+
+```
+epoka e:   root_e ─┬─ HMAC(chain) ── klucz per wiadomość
+                   └─ HMAC(chain drugiego kierunku)
+przejście: świeży X25519 → dh → root_{e+1} = HKDF(dh, root_e, "ratchet/e+1")
+           oba łańcuchy startują od zera z nowego roota
+```
+
+- Inicjuje **tylko host** — brak sytuacji, w której obie strony przeskakują
+  epokę jednocześnie i rozjeżdżają się na zawsze (klasyczny błąd ratchetów).
+- Host przechodzi dalej dopiero, gdy **odebrał** ramkę w bieżącej epoce:
+  to dowód, że rozmówca jest w tej samej epoce i policzy ten sam root.
+- Po przyjęciu epoki **gość obraca własną parę kluczy**. Bez tego jego klucz
+  DH żyłby całą sesję i przejęcie stanu pozwalałoby czytać kolejną epokę.
+- Każda ramka nowej epoki niesie `p` = aktualny klucz publiczny nadawcy.
+  Dzięki temu zgubiona ramka nie urywa sesji: wystarczy dowolna następna.
+- Przejście epoki jest **transakcyjne**: nowy root i łańcuchy powstają na
+  kopiach, a stan commituje się tylko po udanym odszyfrowaniu. Fałszywa ramka
+  z `e = epoka+1` nie może zablokować sesji.
+- Ramki z poprzedniej epoki (w locie) są nadal odszyfrowywane — trzymamy
+  jeden poprzedni łańcuch odbioru.
+
+**Gwarancja, jaką to daje:** stan skradziony w epoce *e* czyta jeszcze epokę
+*e+1* (okno ≤ 32 wiadomości), ale **epoki e+2 i dalszych już nie** — bo
+wchodzi do nich klucz wygenerowany po kradzieży. To dokładnie obietnica
+Double Ratcheta: uzdrawianie po jednym kroku, nie natychmiast.
+
+**2. Baza nie wie o rozmowie nic.** `nz_claim` po udanym wejściu drugiej
+osoby usuwa pokój i miejsca. Przez cały czat w bazie nie ma żadnego wiersza
+opisującego ten pokój.
+
+**3. Zerowanie stanu.** Klucze łańcuchów, root, para DH, klucz rozmówcy,
+pominięte klucze i poprzednia epoka są zerowane przy zniszczeniu sesji.
+Odszyfrowywanie pracuje na **kopiach** łańcuchów, więc nieudana próba nie
+zostawia po sobie zmienionego stanu.
+
+### Czego nie da się (i nie udajemy, że się da)
+
+| Rzecz | Dlaczego |
+|---|---|
+| Zerowanie tekstu w JS | Stringi są niezmienne i kopiowane przez GC. `fill(0)` działa na kluczach, nie na treści. Pełne zeroizacja = WASM z ręczną pamięcią. |
+| Rozmówca ma własną kopię | Zniszczenie u niego zależy od jego przeglądarki, nie od nas. |
+| Metadane IP i czasu | Supabase i Vercel je widzą. Nie da się bez Tora/własnego relay. |
+| Klawiatura i menedżer haseł | Uczenie się słów i podpowiedzi autofill żyją w systemie, nie na stronie. Wyłącza się je w ustawieniach telefonu. |
+| Screenshot, kamera, RAM | Poza zasięgiem webapki. |
+
+### Testy silnika
+
+`npm test` — 35 asercji, m.in. kolejność odwrócona, replay, podmiana bitu,
+dopełnianie, przejście epoki, spóźnione ramki, fałszywe przejęcie epoki
+i symulacja przejęcia pełnego stanu (klon sesji czyta epokę *e+1*, nie czyta *e+2*).

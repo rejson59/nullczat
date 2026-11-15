@@ -291,7 +291,8 @@ export default function Page() {
         const dh = C.agree(e.sk, C.b64u.dec(f.pk));
         const root = C.pairingRoot(S, dh, room.current);
         dh.fill(0);
-        const s = new C.Session(root, true, room.current);
+        const s = new C.Session(root, true, room.current, e, C.b64u.dec(f.pk));
+        root.fill(0);
         sess.current = s;
         setFp(s.fingerprint);
         void sendFrame({ k: "h2", pk: hostPk.current });
@@ -309,7 +310,8 @@ export default function Page() {
         const dh = C.agree(e.sk, C.b64u.dec(f.pk));
         const root = C.pairingRoot(S, dh, room.current);
         dh.fill(0);
-        const s = new C.Session(root, false, room.current);
+        const s = new C.Session(root, false, room.current, e, C.b64u.dec(f.pk));
+        root.fill(0);
         sess.current = s;
         setFp(s.fingerprint);
         void sendFrame(s.encrypt(C.KIND_PING, ""));

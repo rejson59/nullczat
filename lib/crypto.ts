@@ -11,6 +11,8 @@
  *  - parowanie: efemeryczny X25519 + PSK (S) => klucz główny,
  *  - wiadomości: osobny łańcuch HMAC na każdy kierunek (forward secrecy),
  *                każda wiadomość ma własny klucz, XChaCha20-Poly1305,
+ *  - co 32 wiadomości nowa epoka: świeży X25519 => nowy root (uzdrawianie
+ *                po przejęciu: stary stan nie odszyfruje przyszłości),
  *  - dopełnianie do 256 B, żeby długość nie zdradzała treści.
  */
 
@@ -107,7 +109,7 @@ export function pairingRoot(secret: Bytes, dh: Bytes, roomId: string): Bytes {
   return hkdf(sha256, concatBytes(secret, dh), enc.encode(roomId), enc.encode("nullczat/v1/pair"), 32);
 }
 
-export type Frame = { d: number; i: number; n: string; c: string };
+export type Frame = { d: number; e: number; i: number; n: string; c: string; p?: string };
 
 function step(chain: Bytes): { next: Bytes; key: Bytes } {
   return {
@@ -134,71 +136,146 @@ function unpad(buf: Bytes): { kind: number; text: string } | null {
   return { kind: buf[0], text: new TextDecoder().decode(buf.subarray(5, 5 + len)) };
 }
 
+const RATCHET_EVERY = 32; // ile wiadomości w epoce, zanim wejdziemy w nową
+
+type ChainState = { chain: Bytes; idx: number; skipped: Map<number, Bytes> };
+
 export class Session {
-  private sendChain: Bytes;
-  private recvChain: Bytes;
-  private sendIdx = 0;
-  private recvIdx = 0;
-  private skipped = new Map<number, Bytes>();
+  private root: Bytes;
+  private dh: Ephemeral;
+  private peerDh: Bytes | null;
+  private epoch = 0;
+  private send: ChainState;
+  private recv: ChainState;
+  private prev: (ChainState & { epoch: number }) | null = null;
+  private sent = 0;
+  private heard = 0;
   private dir: number;
   private roomId: string;
+  private host: boolean;
   private dead = false;
   readonly fingerprint: string[];
 
-  constructor(root: Bytes, isHost: boolean, roomId: string) {
+  /**
+   * `own` — nasza para kluczy ratchetu (kopia; obiekt wywołującego nie jest ruszany),
+   * `peerPk` — publiczny klucz ratchetu drugiej strony (kopia).
+   */
+  constructor(root: Bytes, isHost: boolean, roomId: string, own: Ephemeral, peerPk: Bytes | null) {
     this.dir = isHost ? 0 : 1;
     this.roomId = roomId;
-    this.sendChain = hkdf(sha256, root, enc.encode("nullczat/v1/chain"), enc.encode("dir/" + this.dir), 32);
-    this.recvChain = hkdf(sha256, root, enc.encode("nullczat/v1/chain"), enc.encode("dir/" + (1 - this.dir)), 32);
-    const f = hkdf(sha256, root, enc.encode("fp"), enc.encode("nullczat/v1/fp"), 8);
+    this.host = isHost;
+    this.root = new Uint8Array(root);
+    this.dh = { sk: new Uint8Array(own.sk), pk: new Uint8Array(own.pk) };
+    this.peerDh = peerPk ? new Uint8Array(peerPk) : null;
+    this.send = { chain: this.chainFor(this.root, this.dir), idx: 0, skipped: new Map() };
+    this.recv = { chain: this.chainFor(this.root, 1 - this.dir), idx: 0, skipped: new Map() };
+    const f = hkdf(sha256, this.root, enc.encode("fp"), enc.encode("nullczat/v1/fp"), 8);
     this.fingerprint = [0, 1, 2, 3].map((k) => PALETTE[(f[k] * 7 + f[k + 4]) % PALETTE.length]);
-    root.fill(0);
   }
 
-  private aad(dir: number, i: number): Bytes {
-    return enc.encode(`${this.roomId}|${dir}|${i}|1`);
+  private chainFor(root: Bytes, dir: number): Bytes {
+    return hkdf(sha256, root, enc.encode("nullczat/v1/chain"), enc.encode("dir/" + dir), 32);
+  }
+
+  private aad(dir: number, e: number, i: number): Bytes {
+    return enc.encode(`${this.roomId}|${dir}|${e}|${i}|2`);
+  }
+
+  /** Nowa epoka: świeży X25519 (tylko host inicjuje) => nowy root => nowe łańcuchy. */
+  private ratchet(): void {
+    if (!this.peerDh) return;
+    const fresh = newEphemeral();
+    const dh = agree(fresh.sk, this.peerDh);
+    this.rotate(dh, this.epoch + 1);
+    this.dh.sk.fill(0);
+    this.dh = fresh;
+  }
+
+  private rotate(dh: Bytes, e: number): void {
+    const root = hkdf(sha256, dh, this.root, enc.encode("nullczat/v1/ratchet/" + e), 32);
+    dh.fill(0);
+    const send = this.chainFor(root, this.dir);
+    const recv = this.chainFor(root, 1 - this.dir);
+
+    this.dropPrev();
+    // poprzednia epoka zostaje wyłącznie po to, by dojechały ramki wysłane w locie
+    this.prev = { chain: this.recv.chain, idx: this.recv.idx, skipped: this.recv.skipped, epoch: this.epoch };
+
+    this.send.chain.fill(0);
+    this.recv.chain.fill(0);
+    this.send = { chain: send, idx: 0, skipped: new Map() };
+    this.recv = { chain: recv, idx: 0, skipped: new Map() };
+    this.root.fill(0);
+    this.root = root;
+    this.epoch = e;
+    this.sent = 0;
+    this.heard = 0;
+  }
+
+  private dropPrev(): void {
+    if (!this.prev) return;
+    for (const k of this.prev.skipped.values()) k.fill(0);
+    this.prev.skipped.clear();
+    this.prev.chain.fill(0);
+    this.prev = null;
   }
 
   encrypt(kind: number, text: string): Frame {
     if (this.dead) throw new Error("dead");
-    const { next, key } = step(this.sendChain);
-    const i = this.sendIdx++;
+    // epoka zmienia się dopiero, gdy wiemy, że rozmówca jest w tej samej —
+    // inaczej przeskoczyłby o epokę i nie policzyłby nowego root
+    if (this.host && this.heard > 0 && this.sent >= RATCHET_EVERY) this.ratchet();
+
+    const st = step(this.send.chain);
+    const i = this.send.idx;
     const nonce = randomBytes(24);
-    const ct = xchacha20poly1305(key, nonce, this.aad(this.dir, i)).encrypt(pad(kind, text));
-    key.fill(0);
-    this.sendChain.fill(0);
-    this.sendChain = next;
-    return { d: this.dir, i, n: b64u.enc(nonce), c: b64u.enc(ct) };
+    const ct = xchacha20poly1305(st.key, nonce, this.aad(this.dir, this.epoch, i)).encrypt(pad(kind, text));
+    st.key.fill(0);
+    this.send.chain.fill(0);
+    this.send = { chain: st.next, idx: i + 1, skipped: this.send.skipped };
+    this.sent++;
+
+    const out: Frame = { d: this.dir, e: this.epoch, i, n: b64u.enc(nonce), c: b64u.enc(ct) };
+    if (this.epoch > 0) out.p = b64u.enc(this.dh.pk);
+    return out;
   }
 
-  decrypt(frame: Frame): { kind: number; text: string } | null {
-    if (this.dead || frame.d !== 1 - this.dir) return null;
+  /** Otwiera ramkę na kopii stanu — nieudane odszyfrowanie nie psuje sesji. */
+  private open(st: ChainState, frame: Frame): { pt: { kind: number; text: string }; state: ChainState } | null {
     const i = frame.i | 0;
-    let key: Bytes | undefined;
+    let key: Bytes;
+    let next: ChainState;
 
-    if (i < this.recvIdx) {
-      key = this.skipped.get(i);
-      if (!key) return null;
-      this.skipped.delete(i);
+    if (i < st.idx) {
+      const found = st.skipped.get(i);
+      if (!found) return null;
+      key = found;
+      const m = new Map(st.skipped);
+      m.delete(i);
+      next = { chain: st.chain, idx: st.idx, skipped: m };
     } else {
-      if (i - this.recvIdx > MAX_SKIP) return null;
-      while (this.recvIdx < i) {
-        const r = step(this.recvChain);
-        this.skipped.set(this.recvIdx, r.key);
-        this.recvChain.fill(0);
-        this.recvChain = r.next;
-        this.recvIdx++;
+      if (i - st.idx > MAX_SKIP) return null;
+      let chain: Bytes = new Uint8Array(st.chain);
+      let idx = st.idx;
+      const skipped = new Map(st.skipped);
+      while (idx < i) {
+        const r = step(chain);
+        chain.fill(0);
+        skipped.set(idx, r.key);
+        chain = r.next;
+        idx++;
       }
-      const r = step(this.recvChain);
+      const r = step(chain);
+      chain.fill(0);
       key = r.key;
-      this.recvChain.fill(0);
-      this.recvChain = r.next;
-      this.recvIdx++;
+      next = { chain: r.next, idx: idx + 1, skipped };
     }
 
     try {
-      const pt = xchacha20poly1305(key, b64u.dec(frame.n), this.aad(frame.d, i)).decrypt(b64u.dec(frame.c));
-      return unpad(pt);
+      const pt = xchacha20poly1305(key, b64u.dec(frame.n), this.aad(frame.d, frame.e, i)).decrypt(b64u.dec(frame.c));
+      const out = unpad(pt);
+      if (!out) return null;
+      return { pt: out, state: next };
     } catch {
       return null;
     } finally {
@@ -206,12 +283,94 @@ export class Session {
     }
   }
 
+  decrypt(frame: Frame): { kind: number; text: string } | null {
+    if (this.dead) return null;
+    if (typeof frame.e !== "number" || typeof frame.i !== "number") return null;
+    if (frame.d !== 1 - this.dir) return null;
+    const e = frame.e | 0;
+
+    if (e === this.epoch) {
+      const r = this.open(this.recv, frame);
+      if (!r) return null;
+      this.recv = r.state;
+      this.heard++;
+      // `p` jest uwierzytelnione przez AEAD; w bieżącej epoce to zawsze
+      // aktualny klucz rozmówcy, więc nadążamy za jego obrotem
+      if (this.host && frame.p) {
+        const pk = b64u.dec(frame.p);
+        this.peerDh?.fill(0);
+        this.peerDh = pk;
+      }
+      return r.pt;
+    }
+
+    // przejęcie nowej epoki jest transakcyjne: commitujemy tylko po udanym odszyfrowaniu
+    if (e === this.epoch + 1) {
+      if (!frame.p || !this.peerDh) return null;
+      let dh: Bytes;
+      try {
+        dh = agree(this.dh.sk, b64u.dec(frame.p));
+      } catch {
+        return null;
+      }
+      const root = hkdf(sha256, dh, this.root, enc.encode("nullczat/v1/ratchet/" + e), 32);
+      dh.fill(0);
+      const send = this.chainFor(root, this.dir);
+      const recv = this.chainFor(root, 1 - this.dir);
+      const r = this.open({ chain: recv, idx: 0, skipped: new Map() }, frame);
+      if (!r) {
+        root.fill(0);
+        send.fill(0);
+        recv.fill(0);
+        return null;
+      }
+
+      this.dropPrev();
+      this.prev = { chain: this.recv.chain, idx: this.recv.idx, skipped: this.recv.skipped, epoch: this.epoch };
+      this.send.chain.fill(0);
+      this.root.fill(0);
+      this.send = { chain: send, idx: 0, skipped: new Map() };
+      this.recv = r.state;
+      this.root = root;
+      this.epoch = e;
+      this.sent = 0;
+      this.heard = 1;
+      const pk = b64u.dec(frame.p);
+      this.peerDh.fill(0);
+      this.peerDh = pk;
+      // własna para też się obraca: klucz użyty w tej epoce nie może
+      // posłużyć do policzenia następnej (inaczej przejęcie stanu zostaje ważne)
+      if (!this.host) {
+        const fresh = newEphemeral();
+        this.dh.sk.fill(0);
+        this.dh = fresh;
+      }
+      return r.pt;
+    }
+
+    if (this.prev && e === this.prev.epoch) {
+      const r = this.open(this.prev, frame);
+      if (!r) return null;
+      this.prev = { chain: r.state.chain, idx: r.state.idx, skipped: r.state.skipped, epoch: this.prev.epoch };
+      return r.pt;
+    }
+
+    return null;
+  }
+
   destroy(): void {
     this.dead = true;
-    for (const k of this.skipped.values()) k.fill(0);
-    this.skipped.clear();
-    this.sendChain.fill(0);
-    this.recvChain.fill(0);
+    for (const k of this.send.skipped.values()) k.fill(0);
+    for (const k of this.recv.skipped.values()) k.fill(0);
+    this.send.skipped.clear();
+    this.recv.skipped.clear();
+    this.dropPrev();
+    this.send.chain.fill(0);
+    this.recv.chain.fill(0);
+    this.root.fill(0);
+    this.dh.sk.fill(0);
+    if (this.peerDh) this.peerDh.fill(0);
+    this.peerDh = null;
   }
 }
 

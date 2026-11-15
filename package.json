@@ -8,7 +8,8 @@
     "start": "next start -H 0.0.0.0 -p 3000",
     "typecheck": "tsc --noEmit",
     "audit": "npm audit --omit=dev",
-    "check": "npm run typecheck && npm run audit"
+    "check": "npm run typecheck && npm run audit",
+    "test": "node --experimental-strip-types test/engine.test.mjs"
   },
   "dependencies": {
     "@noble/ciphers": "1.3.0",
